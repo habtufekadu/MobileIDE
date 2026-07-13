@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Mobile IDE</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      background: #1e1e1e;
+      height: 100%;
+      width: 100%;
+      overflow: hidden;
+      font-family: sans-serif;
+    }
+    #editor-container {
+      width: 100vw;
+      height: 100vh;
+      background: #1e1e1e;
+    }
+    .loading {
+      color: #888;
+      padding: 20px;
+      text-align: center;
+      font-family: monospace;
+      font-size: 18px;
+    }
+    .error {
+      color: #ff5555;
+      padding: 20px;
+      font-family: monospace;
+      background: #2d2d2d;
+    }
+
+    /* ============================================= */
+    /* RUN BUTTON - TOP RIGHT                       */
+    /* ============================================= */
+    #run-btn {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #0e639c;
+      color: white;
+      border: none;
+      border-radius: 50px;
+      padding: 10px 24px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      z-index: 999;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      transition: 0.2s;
+    }
+    #run-btn:active {
+      transform: scale(0.95);
+      background: #1177bb;
+    }
+    #run-btn:disabled {
+      opacity: 0.5;
+      transform: scale(0.95);
+    }
+
+    /* ============================================= */
+    /* OUTPUT OVERLAY - TOP HALF (50% OF SCREEN)   */
+    /* ============================================= */
+    #output-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 50vh; /* EXACTLY HALF THE SCREEN */
+      background: #1e1e1e;
+      border-bottom: 2px solid #333;
+      color: #d4d4d4;
+      padding: 20px;
+      padding-top: 40px; /* Space for the close button */
+      font-family: monospace;
+      font-size: 14px;
+      overflow-y: auto;
+      z-index: 1000;
+      display: none; /* Hidden by default */
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.8);
+      box-sizing: border-box;
+    }
+    #output-overlay.show {
+      display: block;
+    }
+
+    /* Close button (X) */
+    #output-close {
+      position: absolute;
+      top: 8px;
+      right: 16px;
+      background: none;
+      border: none;
+      color: #888;
+      font-size: 24px;
+      cursor: pointer;
+      padding: 0 8px;
+      z-index: 1001;
+    }
+    #output-close:hover {
+      color: #fff;
+    }
+
+    /* Scrollbar styling */
+    #output-overlay::-webkit-scrollbar {
+      width: 6px;
+    }
+    #output-overlay::-webkit-scrollbar-track {
+      background: #1e1e1e;
+    }
+    #output-overlay::-webkit-scrollbar-thumb {
+      background: #555;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body>
+  <div id="editor-container">
+    <div class="loading">⏳ Loading Editor (Offline)...</div>
+  </div>
+
+  <!-- Floating Run Button (Top Right) -->
+  <button id="run-btn">▶ Run</button>
+
+  <!-- Output Overlay (Top Half) -->
+  <div id="output-overlay">
+    <button id="output-close">✕</button>
+    <pre id="output-content" style="margin: 0; white-space: pre-wrap; word-wrap: break-word;"></pre>
+  </div>
+
+  <!-- ============================================= -->
+  <!-- MONACO EDITOR (100% LOCAL)                   -->
+  <!-- ============================================= -->
+  <script src="node_modules/monaco-editor/min/vs/loader.js"></script>
+  <script>
+    let editor;
+
+    try {
+      require.config({ 
+        paths: { vs: 'node_modules/monaco-editor/min/vs' } 
+      });
+      
+      require(['vs/editor/editor.main'], function () {
+        document.getElementById('editor-container').innerHTML = '';
+        
+        editor = monaco.editor.create(document.getElementById('editor-container'), {
+          value: '// Welcome to your Mobile IDE\nconsole.log("Hello, World!");',
+          language: 'javascript',
+          theme: 'vs-dark',
+          automaticLayout: true,
+          fontSize: 14,
+          minimap: { enabled: false },
+          smoothScrolling: false,
+          cursorSmoothCaretAnimation: 'off',
+          renderWhitespace: 'none',
+          scrollBeyondLastLine: false,
+          renderValidationDecorations: 'off',
+          lineNumbersMinChars: 1
+        });
+        
+        window.addEventListener('resize', function() {
+          editor.layout();
+        });
+        
+        console.log('✅ Monaco Editor loaded OFFLINE!');
+      });
+      
+    } catch (e) {
+      document.getElementById('editor-container').innerHTML = 
+        '<div class="error">❌ Local Editor Error: ' + e.message + '</div>';
+    }
+
+    // =============================================
+    // RUN BUTTON + OUTPUT LOGIC
+    // =============================================
+    const runBtn = document.getElementById('run-btn');
+    const outputOverlay = document.getElementById('output-overlay');
+    const outputContent = document.getElementById('output-content');
+    const outputClose = document.getElementById('output-close');
+
+    // --- CLOSE LOGIC: X button OR Clicking OUTSIDE the overlay ---
+    function closeOutput() {
+      outputOverlay.classList.remove('show');
+    }
+
+    // 1. Clicking the "X" button closes it
+    outputClose.addEventListener('click', function(e) {
+      e.stopPropagation();
+      closeOutput();
+    });
+
+    // 2. Clicking ANYWHERE on the dark overlay (the output itself) does NOT close it.
+    //    We intentionally do NOT add a click listener to the overlay.
+
+    // 3. Clicking OUTSIDE the overlay (on the editor or empty background) closes it.
+    //    We listen for clicks on the whole document. If the click target is NOT inside the overlay
+    //    and it is NOT the run button (we don't want to close while clicking run), we close it.
+    document.addEventListener('click', function(e) {
+      if (outputOverlay.classList.contains('show')) {
+        const isClickInsideOutput = outputOverlay.contains(e.target);
+        const isClickOnRunBtn = e.target.id === 'run-btn' || e.target.closest('#run-btn');
+        
+        // If the click is outside the output AND not on the run button, close it.
+        if (!isClickInsideOutput && !isClickOnRunBtn) {
+          closeOutput();
+        }
+      }
+    });
+
+    // 4. Run Button Logic
+    runBtn.addEventListener('click', function() {
+      if (!editor) {
+        alert('Editor is not ready yet.');
+        return;
+      }
+
+      const code = editor.getValue();
+      const btn = this;
+      btn.disabled = true;
+      btn.textContent = '⏳ Running...';
+
+      fetch('http://localhost:3000/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: code })
+      })
+      .then(response => response.json())
+      .then(data => {
+        btn.textContent = '▶ Run';
+        btn.disabled = false;
+        outputContent.textContent = data.output || '✅ Code executed successfully (no output)';
+        outputOverlay.classList.add('show');
+      })
+      .catch(err => {
+        btn.textContent = '▶ Run';
+        btn.disabled = false;
+        outputContent.textContent = '❌ Error: Cannot connect to backend.\n\nMake sure to start the server in Termux:\nnode backend/index.js';
+        outputOverlay.classList.add('show');
+        console.error('Fetch error:', err);
+      });
+    });
+  </script>
+</body>
+</html>

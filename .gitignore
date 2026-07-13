@@ -1,0 +1,5 @@
+node_modules/
+*.apk
+backend/bin/qjs
+.DS_Store
+*.log
