@@ -3,3 +3,4 @@ node_modules/
 backend/bin/qjs
 .DS_Store
 *.log
+prop.txt
