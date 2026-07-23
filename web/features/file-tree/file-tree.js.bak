@@ -1,0 +1,830 @@
+export let fileTreeInstance = null;
+let treeData = [];
+let expandedPaths = new Set();
+let selectedFilePath = '';
+
+export function initFileTree(EventBus) {
+  console.log('📂 Flat File Tree initialized with Search & Collapse');
+  loadTree();
+  EventBus.subscribe('file-tree:refresh', () => {
+    loadTree();
+  });
+}
+
+export function toggleFileTree() {
+  const leftDrawer = document.getElementById('left-drawer');
+  const leftOverlay = document.getElementById('left-overlay');
+  if (leftDrawer) leftDrawer.classList.toggle('active');
+  if (leftOverlay) leftOverlay.classList.toggle('active');
+  if (leftDrawer && leftDrawer.classList.contains('active')) {
+    loadTree();
+  }
+}
+
+export function openFileTree() {
+  const leftDrawer = document.getElementById('left-drawer');
+  const leftOverlay = document.getElementById('left-overlay');
+  if (leftDrawer) leftDrawer.classList.add('active');
+  if (leftOverlay) leftOverlay.classList.add('active');
+  loadTree();
+}
+
+export function closeFileTree() {
+  const leftDrawer = document.getElementById('left-drawer');
+  const leftOverlay = document.getElementById('left-overlay');
+  if (leftDrawer) leftDrawer.classList.remove('active');
+  if (leftOverlay) leftOverlay.classList.remove('active');
+}
+
+function showOutput(text) {
+  const outputOverlay = document.getElementById('output-overlay');
+  const outputContent = document.getElementById('output-content');
+  if (outputContent) outputContent.textContent = text;
+  if (outputOverlay) outputOverlay.classList.add('show');
+}
+
+function injectStyles() {
+  if (document.getElementById('file-tree-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'file-tree-styles';
+  style.textContent = `
+    #file-tree-content {
+      overflow-x: auto !important;
+      overflow-y: auto;
+      flex: 1;
+      height: 100%;
+      scrollbar-width: thin;
+      direction: ltr;
+      padding: 4px 0;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      background: #1e1e1e;
+      
+      -webkit-tap-highlight-color: transparent !important;
+      -webkit-touch-callout: none !important;
+      -webkit-user-select: none !important;
+      user-select: none !important;
+    }
+    #file-tree-content::-webkit-scrollbar {
+      height: 3px;
+      width: 3px;
+      background: transparent;
+    }
+    #file-tree-content::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    #file-tree-content::-webkit-scrollbar-thumb {
+      background: #424242;
+      border-radius: 2px;
+    }
+
+    .tree-flat-container {
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+      margin: 0;
+      width: 100%;
+    }
+
+    .tree-row {
+      display: flex;
+      align-items: center;
+      padding: 0 4px;
+      cursor: pointer;
+      transition: background 0.1s;
+      min-height: 24px;
+      height: 24px;
+      white-space: nowrap;
+      width: max-content;
+      min-width: 100%;
+      box-sizing: border-box;
+      overflow: hidden !important;
+      position: relative;
+      
+      -webkit-user-select: none !important;
+      user-select: none !important;
+      -webkit-tap-highlight-color: transparent !important;
+      outline: none !important;
+    }
+    
+    .tree-row:hover { background: #2a2a2a; }
+    .tree-row.selected { background: #37373d !important; }
+
+    .indent-guide-box {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 24px;
+      flex-shrink: 0;
+      box-sizing: border-box;
+      position: relative;
+    }
+    
+    .line-active::before {
+      content: "";
+      position: absolute;
+      left: 7px;
+      top: 0;
+      bottom: 0;
+      width: 1px;
+      background-color: #3d444d;
+    }
+
+    .line-last-child::before {
+      bottom: 50% !important;
+    }
+
+    .line-horizontal-tick::after {
+      content: "";
+      position: absolute;
+      left: 7px;
+      top: 50%;
+      width: 9px;
+      height: 1px;
+      background-color: #3d444d;
+    }
+
+    .folder-arrow {
+      font-size: 8px;
+      width: 12px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #858585;
+      flex-shrink: 0;
+      transition: transform 0.1s ease;
+      line-height: 24px;
+    }
+    .folder-arrow.expanded { transform: rotate(90deg); }
+    
+    .folder-icon, .file-icon {
+      font-size: 14px;
+      width: 16px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-right: 4px;
+      flex-shrink: 0;
+      line-height: 24px;
+    }
+    
+    .item-name {
+      color: #cccccc;
+      font-size: 13px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      line-height: 24px;
+      display: inline-block;
+    }
+
+    .tree-empty {
+      color: #888;
+      padding: 12px 8px;
+      font-size: 13px;
+    }
+
+    .tree-header-wrapper {
+      display: flex;
+      flex-direction: column;
+      border-bottom: 1px solid #2d2d2d;
+      background: #1e1e1e;
+      padding-bottom: 4px;
+      flex-shrink: 0;
+    }
+
+    .tree-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 10px;
+      min-height: 32px;
+    }
+    
+    .tree-header-title {
+      color: #aaa;
+      font-weight: 600;
+      font-size: 11px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+
+    .tree-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tree-action-btn {
+      background: none;
+      border: none;
+      color: #aaa;
+      font-size: 11px;
+      cursor: pointer;
+      padding: 3px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+    }
+    .tree-action-btn:hover { background: #2d2d2d; color: #fff; }
+
+    .tree-plus-btn {
+      background: none;
+      border: none;
+      color: #aaa;
+      font-size: 16px;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+      border-radius: 4px;
+      position: relative;
+      z-index: 10;
+    }
+    .tree-plus-btn:hover { background: #2d2d2d; color: #fff; }
+
+    .tree-search-container {
+      padding: 0 8px 4px 8px;
+      box-sizing: border-box;
+      width: 100%;
+    }
+    .tree-search-input {
+      width: 100%;
+      background: #252526;
+      border: 1px solid #3c3c3c;
+      color: #cccccc;
+      border-radius: 3px;
+      padding: 4px 6px;
+      font-size: 12px;
+      outline: none;
+      box-sizing: border-box;
+      font-family: inherit;
+    }
+    .tree-search-input:focus {
+      border-color: #007acc;
+    }
+
+    .tree-dropdown {
+      display: none;
+      position: absolute;
+      top: 100%;
+      right: 0;
+      background: #252526;
+      border: 1px solid #454545;
+      border-radius: 4px;
+      padding: 4px 0;
+      min-width: 140px;
+      z-index: 100;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.4);
+    }
+    .tree-dropdown button {
+      display: block;
+      width: 100%;
+      background: none;
+      border: none;
+      color: #cccccc;
+      padding: 6px 12px;
+      text-align: left;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .tree-dropdown button:hover { background: #37373d; color: #fff; }
+    .tree-dropdown.show { display: block; }
+
+    #left-drawer {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: #1e1e1e;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function getSelectedFilePath() {
+  const activeTab = document.querySelector('.tab-item.active');
+  if (activeTab) {
+    return activeTab.dataset.file || '';
+  }
+  return '';
+}
+
+function loadTree() {
+  const container = document.getElementById('file-tree-content');
+  if (!container) return;
+  injectStyles();
+  selectedFilePath = getSelectedFilePath();
+
+  container.innerHTML = '<p class="tree-empty">⏳ Loading...</p>';
+  fetch('http://localhost:3000/list-tree')
+    .then(response => response.json())
+    .then(data => {
+      if (data.error) {
+        container.innerHTML = `<p class="tree-empty" style="color:#f14c4c;">❌ ${data.error}</p>`;
+        return;
+      }
+      treeData = data.tree || [];
+      
+      container.innerHTML = '';
+      addTreeHeader(container);
+      
+      const flatDiv = document.createElement('div');
+      flatDiv.className = 'tree-flat-container';
+      
+      buildFlatTree(flatDiv, treeData, '', [], true);
+      container.appendChild(flatDiv);
+      
+      const searchInput = document.getElementById('file-tree-search');
+      if (searchInput && searchInput.value) {
+        filterTreeDOM(searchInput.value);
+      }
+    })
+    .catch(err => {
+      console.error('Failed to load tree:', err);
+      container.innerHTML = '<p class="tree-empty">📂 No files saved yet</p>';
+    });
+}
+
+function buildFlatTree(containerElement, nodes, parentPath = '', ancestorIsLast = [], isVisible = true) {
+  if (!nodes || nodes.length === 0) return;
+
+  nodes.sort((a, b) => {
+    if (a.type === 'folder' && b.type !== 'folder') return -1;
+    if (a.type !== 'folder' && b.type === 'folder') return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  const depth = ancestorIsLast.length;
+
+  nodes.forEach((node, index) => {
+    const isLastItem = (index === nodes.length - 1);
+    const fullPath = parentPath ? `${parentPath}/${node.name}` : node.name;
+    const isExpanded = expandedPaths.has(fullPath);
+
+    const row = document.createElement('div');
+    row.className = 'tree-row';
+    row.dataset.path = fullPath;
+    row.dataset.parent = parentPath;
+    row.dataset.type = node.type;
+    
+    if (!isVisible) {
+      row.style.display = 'none';
+    }
+
+    for (let i = 0; i < depth; i++) {
+      const spacer = document.createElement('div');
+      spacer.className = 'indent-guide-box';
+      if (!ancestorIsLast[i]) {
+        spacer.className += ' line-active';
+      }
+      row.appendChild(spacer);
+    }
+
+    if (depth > 0) {
+      const immediateSpacer = document.createElement('div');
+      immediateSpacer.className = 'indent-guide-box line-active line-horizontal-tick';
+      if (isLastItem) {
+        immediateSpacer.className += ' line-last-child';
+      }
+      row.appendChild(immediateSpacer);
+    }
+
+    row.addEventListener('touchstart', (e) => {
+      e.stopPropagation();
+    }, { passive: true });
+
+    if (node.type === 'folder') {
+      const arrow = document.createElement('span');
+      arrow.className = 'folder-arrow';
+      if (isExpanded) arrow.classList.add('expanded');
+      arrow.textContent = '▶';
+
+      const icon = document.createElement('span');
+      icon.className = 'folder-icon';
+      icon.textContent = '📁';
+
+      const name = document.createElement('span');
+      name.className = 'item-name';
+      name.textContent = node.name;
+
+      row.appendChild(arrow);
+      row.appendChild(icon);
+      row.appendChild(name);
+
+      containerElement.appendChild(row);
+
+      row.addEventListener('click', (e) => {
+        e.stopPropagation();
+        
+        const searchInput = document.getElementById('file-tree-search');
+        if (searchInput && searchInput.value.trim() !== '') return;
+
+        const currentlyExpanded = expandedPaths.has(fullPath);
+        
+        if (currentlyExpanded) {
+          expandedPaths.delete(fullPath);
+          arrow.classList.remove('expanded');
+          collapseFlatFolder(fullPath);
+        } else {
+          expandedPaths.add(fullPath);
+          arrow.classList.add('expanded');
+          expandFlatFolder(fullPath);
+        }
+      });
+
+      setupLongPress(row, fullPath, node.type, containerElement);
+
+      if (node.children && node.children.length > 0) {
+        buildFlatTree(containerElement, node.children, fullPath, [...ancestorIsLast, isLastItem], isVisible && isExpanded);
+      }
+
+    } else {
+      const iconMap = {
+        'js':'📄','html':'🌐','css':'🎨','json':'📋','md':'📝','txt':'📃',
+        'py':'🐍','java':'☕','c':'⚙️','cpp':'⚙️','sh':'⚡','xml':'📰',
+        'yaml':'📄','yml':'📄','toml':'📄','ini':'📄','conf':'📄','log':'📄','csv':'📊'
+      };
+      const ext = node.name.split('.').pop().toLowerCase();
+
+      const arrowPlaceholder = document.createElement('div');
+      arrowPlaceholder.className = 'folder-arrow';
+      row.appendChild(arrowPlaceholder);
+
+      const icon = document.createElement('span');
+      icon.className = 'file-icon';
+      icon.textContent = iconMap[ext] || '📄';
+
+      const name = document.createElement('span');
+      name.className = 'item-name';
+      name.textContent = node.name;
+
+      row.appendChild(icon);
+      row.appendChild(name);
+
+      if (fullPath === selectedFilePath || node.name === selectedFilePath) {
+        row.classList.add('selected');
+      }
+
+      containerElement.appendChild(row);
+
+      row.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (window.openFile) {
+          window.openFile(fullPath);
+          document.querySelectorAll('.tree-row.selected').forEach(el => el.classList.remove('selected'));
+          row.classList.add('selected');
+        }
+      });
+
+      setupLongPress(row, fullPath, node.type, containerElement);
+    }
+  });
+}
+
+function expandFlatFolder(parentPath) {
+  const rows = document.querySelectorAll('.tree-row');
+  rows.forEach(row => {
+    if (row.dataset.parent === parentPath) {
+      row.style.display = 'flex';
+      if (row.dataset.type === 'folder' && expandedPaths.has(row.dataset.path)) {
+        expandFlatFolder(row.dataset.path);
+      }
+    }
+  });
+}
+
+function collapseFlatFolder(parentPath) {
+  const rows = document.querySelectorAll('.tree-row');
+  rows.forEach(row => {
+    if (row.dataset.path.startsWith(parentPath + '/')) {
+      row.style.display = 'none';
+    }
+  });
+}
+
+function filterTreeDOM(queryText) {
+  const cleanQuery = queryText.trim().toLowerCase();
+  const rows = document.querySelectorAll('.tree-row');
+
+  if (cleanQuery === '') {
+    rows.forEach(row => {
+      const parent = row.dataset.parent;
+      if (!parent) {
+        row.style.display = 'flex';
+      } else {
+        let currentParent = parent;
+        let visible = true;
+        while (currentParent) {
+          if (!expandedPaths.has(currentParent)) {
+            visible = false;
+            break;
+          }
+          const parentRow = document.querySelector(`.tree-row[data-path="${currentParent}"]`);
+          currentParent = parentRow ? parentRow.dataset.parent : '';
+        }
+        row.style.display = visible ? 'flex' : 'none';
+      }
+    });
+    return;
+  }
+
+  rows.forEach(row => {
+    const itemName = row.querySelector('.item-name').textContent.toLowerCase();
+    if (itemName.includes(cleanQuery)) {
+      row.style.display = 'flex';
+    } else {
+      row.style.display = 'none';
+    }
+  });
+}
+
+function addTreeHeader(container) {
+  let wrapper = document.getElementById('file-tree-header-wrapper');
+  if (wrapper) return;
+
+  wrapper = document.createElement('div');
+  wrapper.id = 'file-tree-header-wrapper';
+  wrapper.className = 'tree-header-wrapper';
+
+  const header = document.createElement('div');
+  header.className = 'tree-header';
+
+  const title = document.createElement('span');
+  title.className = 'tree-header-title';
+  title.textContent = 'Explorer';
+  header.appendChild(title);
+
+  const actionsContainer = document.createElement('div');
+  actionsContainer.className = 'tree-header-actions';
+
+  const collapseBtn = document.createElement('button');
+  collapseBtn.className = 'tree-action-btn';
+  collapseBtn.textContent = 'Collapse';
+  collapseBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    expandedPaths.clear();
+    
+    document.querySelectorAll('.folder-arrow').forEach(arrow => arrow.classList.remove('expanded'));
+    
+    const searchInput = document.getElementById('file-tree-search');
+    if (searchInput) searchInput.value = '';
+
+    document.querySelectorAll('.tree-row').forEach(row => {
+      row.style.display = row.dataset.parent ? 'none' : 'flex';
+    });
+  });
+  actionsContainer.appendChild(collapseBtn);
+
+  const plusContainer = document.createElement('div');
+  plusContainer.style.cssText = 'position:relative;display:inline-block;';
+
+  const plusBtn = document.createElement('button');
+  plusBtn.className = 'tree-plus-btn';
+  plusBtn.textContent = '+';
+  plusBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const dropdown = document.getElementById('tree-dropdown');
+    if (dropdown) dropdown.classList.toggle('show');
+  });
+  plusContainer.appendChild(plusBtn);
+
+  const dropdown = document.createElement('div');
+  dropdown.id = 'tree-dropdown';
+  dropdown.className = 'tree-dropdown';
+
+  const newFileBtn = document.createElement('button');
+  newFileBtn.textContent = '📄 New File';
+  newFileBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dropdown.classList.remove('show');
+    createNewFile();
+  });
+  dropdown.appendChild(newFileBtn);
+
+  const newFolderBtn = document.createElement('button');
+  newFolderBtn.textContent = '📁 New Folder';
+  newFolderBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dropdown.classList.remove('show');
+    createNewFolder();
+  });
+  dropdown.appendChild(newFolderBtn);
+
+  plusContainer.appendChild(dropdown);
+  actionsContainer.appendChild(plusContainer);
+  header.appendChild(actionsContainer);
+  wrapper.appendChild(header);
+
+  const searchContainer = document.createElement('div');
+  searchContainer.className = 'tree-search-container';
+
+  const searchInput = document.createElement('input');
+  searchInput.id = 'file-tree-search';
+  searchInput.className = 'tree-search-input';
+  searchInput.type = 'text';
+  searchInput.placeholder = 'Filter files by name...';
+  searchInput.autocomplete = 'off';
+  
+  searchInput.addEventListener('input', (e) => {
+    filterTreeDOM(e.target.value);
+  });
+
+  searchContainer.appendChild(searchInput);
+  wrapper.appendChild(searchContainer);
+
+  container.parentNode.insertBefore(wrapper, container);
+
+  document.addEventListener('click', function closeDropdown(e) {
+    if (dropdown.classList.contains('show')) {
+      if (!dropdown.contains(e.target) && e.target !== plusBtn) {
+        dropdown.classList.remove('show');
+      }
+    }
+  });
+}
+
+function setupLongPress(element, fullPath, type, container) {
+  let longPressTimer = null;
+
+  const startPress = (e) => {
+    longPressTimer = setTimeout(() => {
+      showContextMenu(e, fullPath, type, container);
+    }, 500);
+  };
+
+  const endPress = () => {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  };
+
+  element.addEventListener('touchstart', startPress, { passive: true });
+  element.addEventListener('touchend', endPress, { passive: true });
+  element.addEventListener('touchmove', endPress, { passive: true });
+  element.addEventListener('mousedown', startPress);
+  element.addEventListener('mouseup', endPress);
+  element.addEventListener('mouseleave', endPress);
+}
+
+function showContextMenu(e, fullPath, type, container) {
+  const existing = document.getElementById('file-context-menu');
+  if (existing) existing.remove();
+
+  const menu = document.createElement('div');
+  menu.id = 'file-context-menu';
+  let x, y;
+  if (e.touches) {
+    x = e.touches[0].clientX;
+    y = e.touches[0].clientY;
+  } else {
+    x = e.clientX || 0;
+    y = e.clientY || 0;
+  }
+  if (x + 160 > window.innerWidth) x = window.innerWidth - 160;
+  if (y + 140 > window.innerHeight) y = window.innerHeight - 140;
+
+  menu.style.cssText = `
+    position: fixed;
+    top: ${y}px;
+    left: ${x}px;
+    background: #252526;
+    border: 1px solid #454545;
+    border-radius: 4px;
+    padding: 4px 0;
+    min-width: 150px;
+    z-index: 9999;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+  `;
+
+  const items = [];
+  if (type === 'folder') {
+    items.push(
+      { label: '📄 New File', action: () => { menu.remove(); createNewFile(fullPath); } },
+      { label: '📁 New Folder', action: () => { menu.remove(); createNewFolder(fullPath); } },
+      { label: '✏️ Rename', action: () => { menu.remove(); renameItem(fullPath, type, container); } },
+      { label: '🗑️ Delete', action: () => { menu.remove(); deleteItem(fullPath, type, container); } }
+    );
+  } else {
+    items.push(
+      { label: '✏️ Rename', action: () => { menu.remove(); renameItem(fullPath, type, container); } },
+      { label: '🗑️ Delete', action: () => { menu.remove(); deleteItem(fullPath, type, container); } }
+    );
+  }
+
+  items.forEach(item => {
+    const btn = document.createElement('button');
+    btn.textContent = item.label;
+    btn.style.cssText = `
+      display:block;width:100%;background:none;border:none;color:#ccc;padding:8px 16px;
+      text-align:left;font-size:13px;cursor:pointer;font-family:inherit;
+    `;
+    btn.addEventListener('mouseenter', () => { btn.style.background = '#37373d'; });
+    btn.addEventListener('mouseleave', () => { btn.style.background = 'transparent'; });
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      item.action();
+    });
+    btn.addEventListener('touchstart', (e) => {
+      e.stopPropagation();
+      item.action();
+    });
+    menu.appendChild(btn);
+  });
+
+  document.body.appendChild(menu);
+
+  setTimeout(() => {
+    document.addEventListener('click', function closeMenu() {
+      menu.remove();
+      document.removeEventListener('click', closeMenu);
+    });
+  }, 10);
+}
+
+function createNewFile(parentPath = '') {
+  const name = prompt('Enter file name:', 'newfile.js');
+  if (!name) return;
+  const filePath = parentPath ? `${parentPath}/${name}` : name;
+  const emptyContent = `// ${name} created\n`;
+  fetch('http://localhost:3000/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filePath, content: emptyContent })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      loadTree();
+      if (window.openFile) window.openFile(filePath);
+    } else {
+      showOutput(`❌ Create failed: ${data.error}`);
+    }
+  })
+  .catch(() => showOutput('❌ Error connecting to backend.'));
+}
+
+function createNewFolder(parentPath = '') {
+  const name = prompt('Enter folder name:', 'new-folder');
+  if (!name) return;
+  const folderPath = parentPath ? `${parentPath}/${name}` : name;
+  fetch('http://localhost:3000/create-folder', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPath })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      loadTree();
+      expandedPaths.add(parentPath);
+    } else {
+      showOutput(`❌ Create folder failed: ${data.error}`);
+    }
+  })
+  .catch(() => showOutput('❌ Error connecting to backend.'));
+}
+
+function renameItem(oldPath, type, container) {
+  const name = prompt(`Rename ${type}:`, oldPath.split('/').pop());
+  if (!name || name === oldPath.split('/').pop()) return;
+  const newPath = oldPath.replace(/[^/]+$/, name);
+  fetch('http://localhost:3000/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ oldPath, newPath })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      loadTree();
+    } else {
+      showOutput(`❌ Rename failed: ${data.error}`);
+    }
+  })
+  .catch(() => showOutput('❌ Error connecting to backend.'));
+}
+
+function deleteItem(targetPath, type, container) {
+  if (!confirm(`Delete ${type} "${targetPath}"?`)) return;
+  fetch('http://localhost:3000/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: targetPath })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      loadTree();
+    } else {
+      showOutput(`❌ Delete failed: ${data.error}`);
+    }
+  })
+  .catch(() => showOutput('❌ Error connecting to backend.'));
+}
+
+export function refreshFileTree() {
+  loadTree();
+}

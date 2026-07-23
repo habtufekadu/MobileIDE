@@ -2,53 +2,191 @@ import { EventBus } from './event-bus.js';
 import { initEditor, editor, setEditorContent, getEditorContent } from '../features/editor/editor.js';
 import { initSettings, openSettings, closeSettings } from '../features/settings/settings.js';
 import { initTerminal, openTerminal } from '../features/terminal/terminal.js';
-import { initFileTree, toggleFileTree, openFileTree, closeFileTree } from '../features/file-tree/file-tree.js';
+import { initFileTree, toggleFileTree, openFileTree, closeFileTree, refreshFileTree } from '../features/file-tree/file-tree.js';
 import { initTheme, toggleTheme, setTheme, currentTheme } from '../features/theme-selector/theme-selector.js';
 
-export { EventBus, editor, setEditorContent, getEditorContent, openSettings, closeSettings, openTerminal, toggleFileTree, openFileTree, closeFileTree, toggleTheme, setTheme, currentTheme };
+import { 
+  openTabs, activeTabId, tabContents, isDirty, 
+  createTab, switchTab, closeTab, setDirty, getActiveTabInfo 
+} from '../features/editor/tabs.js';
+
+import { 
+  recentFiles, 
+  saveFile, 
+  openFile, 
+  handleSave, 
+  handleSaveAs, 
+  showRecentFiles,
+  createNewFile 
+} from '../features/file-manager/file-manager.js';
+
+import { initFileMenu } from '../features/file-manager/file-menu.js';
+
+export { 
+  EventBus, 
+  editor, 
+  setEditorContent, 
+  getEditorContent, 
+  openSettings, 
+  closeSettings, 
+  openTerminal, 
+  toggleFileTree, 
+  openFileTree, 
+  closeFileTree, 
+  toggleTheme, 
+  setTheme, 
+  currentTheme,
+  createTab,
+  switchTab,
+  closeTab,
+  setDirty,
+  saveFile,
+  openFile,
+  handleSave,
+  handleSaveAs,
+  showRecentFiles,
+  createNewFile
+};
+
+window.editorModels = window.editorModels || {};
+let autoSaveTimer = null;
+
+function getOrCreateModel(fileName, content) {
+  if (!window.monaco) return null;
+  if (window.editorModels[fileName]) return window.editorModels[fileName];
+  
+  const lang = getLanguageFromExtension(fileName);
+  const fileUri = window.monaco.Uri.file(fileName);
+  
+  let model = window.monaco.editor.getModel(fileUri);
+  if (!model) {
+    model = window.monaco.editor.createModel(content, lang, fileUri);
+  } else {
+    model.setValue(content);
+  }
+  
+  window.editorModels[fileName] = model;
+  return model;
+}
+
+window.openFile = (fileName) => {
+  openFile(fileName, (name, content) => {
+    ensureEditor();
+    const tabId = createTab(name, content, (fname, c, feedback) => saveFile(fname, c, feedback, refreshFileTree));
+    if (tabId) {
+      const result = switchTab(tabId);
+      if (result && editor) {
+        showEditor();
+        const model = getOrCreateModel(result.fileName, content);
+        if (model) {
+          editor.setModel(model);
+        } else {
+          const lang = getLanguageFromExtension(result.fileName);
+          setEditorContent(content, lang);
+        }
+        setDirty(false);
+      }
+    }
+    refreshFileTree();
+  }, () => {});
+};
+
+window.openTab = (fileName, content) => {
+  ensureEditor();
+  const tabId = createTab(fileName, content, (fname, c, feedback) => saveFile(fname, c, feedback, refreshFileTree));
+  if (tabId) {
+    const result = switchTab(tabId);
+    if (result && editor) {
+      showEditor();
+      const model = getOrCreateModel(result.fileName, content);
+      if (model) {
+        editor.setModel(model);
+      } else {
+        const lang = getLanguageFromExtension(result.fileName);
+        setEditorContent(content, lang);
+      }
+      setDirty(false);
+    }
+  }
+  refreshFileTree();
+};
+
+window.closeTabById = (tabId) => {
+  const activeTab = document.querySelector(`.tab-item[data-tab-id="${tabId}"]`);
+  if (activeTab && activeTab.dataset.file) {
+    const filePath = activeTab.dataset.file;
+    if (window.editorModels[filePath]) {
+      window.editorModels[filePath].dispose();
+      delete window.editorModels[filePath];
+    }
+  }
+
+  closeTab(tabId);
+
+  if (openTabs.length === 0) {
+    if (editor) editor.setModel(null);
+  } else {
+    const activeInfo = getActiveTabInfo();
+    if (activeInfo && window.editorModels[activeInfo.fileName]) {
+      const nextModel = window.editorModels[activeInfo.fileName];
+      if (editor && nextModel) {
+        editor.setModel(nextModel);
+      }
+    }
+  }
+  refreshFileTree();
+};
+
+window.onTabChanged = (tabInfo) => {
+    if (!editor) return;
+    const model = window.editorModels[tabInfo.fileName];
+    if (model) {
+        editor.setModel(model);
+        editor.focus();
+    }
+};
+
+function getLanguageFromExtension(fileName) {
+  const ext = fileName.split('.').pop().toLowerCase();
+  const map = {
+    'js': 'javascript', 'html': 'html', 'css': 'css', 'json': 'json',
+    'py': 'python', 'java': 'java', 'c': 'c', 'cpp': 'cpp',
+    'md': 'markdown', 'xml': 'xml', 'yaml': 'yaml', 'sh': 'shell',
+    'sql': 'sql', 'go': 'go', 'rb': 'ruby', 'php': 'php', 'rs': 'rust',
+    'ts': 'typescript', 'jsx': 'javascript', 'tsx': 'typescript'
+  };
+  return map[ext] || 'plaintext';
+}
+
+let editorInitialized = false;
+
+function ensureEditor() {
+  if (!editorInitialized) {
+    initEditor(EventBus);
+    editorInitialized = true;
+  }
+}
+
+function showEditor() {
+  const editorContainer = document.getElementById('editor-container');
+  if (editorContainer) editorContainer.style.display = 'block';
+  if (editor) {
+    setTimeout(() => editor.layout(), 100);
+  }
+}
 
 export function initApp() {
-  console.log('🚀 Bootstrapping IDE...');
+  console.log('🚀 Bootstrapping IDE (Modular)...');
 
-  // =============================================
-  // 1. FORCE WELCOME SCREEN ON STARTUP
-  // =============================================
-  const welcomeScreen = document.getElementById('welcome-screen');
-  const editorContainer = document.getElementById('editor-container');
+  ensureEditor();
+  showEditor();
 
-  if (welcomeScreen) {
-    welcomeScreen.style.display = 'flex';
-    console.log('✅ Welcome screen shown');
-  }
-  if (editorContainer) {
-    editorContainer.style.display = 'none';
-    console.log('✅ Editor container hidden');
-  }
-
-  // =============================================
-  // 2. INITIALIZE FEATURES (BUT NOT EDITOR YET)
-  // =============================================
   initSettings(EventBus);
   initTerminal(EventBus);
   initFileTree(EventBus);
   initTheme(EventBus);
 
-  // Initialize editor only when needed (lazy)
-  let editorInitialized = false;
-
-  function ensureEditor() {
-    if (!editorInitialized) {
-      initEditor(EventBus);
-      editorInitialized = true;
-    }
-  }
-
-  // =============================================
-  // 3. UI BUTTON BINDINGS
-  // =============================================
   document.getElementById('menu-btn')?.addEventListener('click', toggleFileTree);
-  document.getElementById('files-btn')?.addEventListener('click', toggleFileTree);
-
   document.getElementById('settings-btn')?.addEventListener('click', () => {
     const rightDrawer = document.getElementById('right-drawer');
     const rightOverlay = document.getElementById('right-overlay');
@@ -56,9 +194,7 @@ export function initApp() {
     if (rightOverlay) rightOverlay.classList.toggle('active');
     openSettings();
   });
-
   document.getElementById('terminal-btn')?.addEventListener('click', openTerminal);
-
   document.getElementById('left-overlay')?.addEventListener('click', toggleFileTree);
   document.getElementById('right-overlay')?.addEventListener('click', () => {
     const rightDrawer = document.getElementById('right-drawer');
@@ -67,215 +203,66 @@ export function initApp() {
     if (rightOverlay) rightOverlay.classList.remove('active');
   });
 
-  // =============================================
-  // 4. WELCOME SCREEN BUTTONS
-  // =============================================
-  document.getElementById('welcome-new-file')?.addEventListener('click', () => {
-    const fileName = prompt('Enter file name (with extension):', 'newfile.js');
-    if (fileName) {
-      // Show editor, hide welcome
-      if (welcomeScreen) welcomeScreen.style.display = 'none';
-      if (editorContainer) editorContainer.style.display = 'block';
-      ensureEditor(); // Create editor if not created
-      createTab(fileName);
-    }
-  });
-
-  document.getElementById('welcome-open-folder')?.addEventListener('click', () => {
-    toggleFileTree();
-  });
-
-  // =============================================
-  // 5. SYMBOL BAR
-  // =============================================
-  document.querySelectorAll('.sym-btn[data-sym]').forEach(btn => {
-    btn.addEventListener('click', function() {
-      if (!editor) return;
-      const sym = this.dataset.sym;
-      const selection = editor.getSelection();
-      editor.executeEdits('symbol-insert', [{ range: selection, text: sym, forceMoveMarkers: true }]);
-      const newPos = { lineNumber: selection.startLineNumber, column: selection.startColumn + sym.length };
-      editor.setPosition(newPos);
-      editor.focus();
-    });
-  });
-
-  // =============================================
-  // 6. COPY & PASTE
-  // =============================================
-  document.getElementById('copy-btn')?.addEventListener('click', function() {
-    if (!editor) return;
-    const selection = editor.getSelection();
-    if (selection.isEmpty()) return;
-    const model = editor.getModel();
-    if (!model) return;
-    const text = model.getValueInRange(selection);
-    if (!text) return;
-    const ta = document.createElement('textarea');
-    ta.style.cssText = 'position:fixed;opacity:0;left:-9999px;top:-9999px;';
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    ta.setSelectionRange(0, text.length);
-    try { document.execCommand('copy'); } catch(e) { console.error(e); }
-    document.body.removeChild(ta);
-  });
-
-  document.getElementById('paste-btn')?.addEventListener('click', function() {
-    const pasteOverlay = document.getElementById('paste-overlay');
-    const pasteTextarea = document.getElementById('paste-textarea');
-    if (pasteOverlay) pasteOverlay.classList.add('show');
-    setTimeout(() => { if (pasteTextarea) pasteTextarea.focus(); }, 150);
-  });
-
-  document.getElementById('paste-confirm')?.addEventListener('click', function() {
-    const pasteOverlay = document.getElementById('paste-overlay');
-    const pasteTextarea = document.getElementById('paste-textarea');
-    const text = pasteTextarea ? pasteTextarea.value : '';
-    if (text && editor) {
-      const selection = editor.getSelection();
-      editor.executeEdits('paste', [{ range: selection, text: text, forceMoveMarkers: true }]);
-      editor.setSelection(selection);
-    }
-    if (pasteOverlay) pasteOverlay.classList.remove('show');
-    if (editor) editor.focus();
-  });
-
-  document.getElementById('paste-cancel')?.addEventListener('click', function() {
-    const pasteOverlay = document.getElementById('paste-overlay');
-    if (pasteOverlay) pasteOverlay.classList.remove('show');
-    if (editor) editor.focus();
-  });
-
-  document.getElementById('paste-overlay')?.addEventListener('click', function(e) {
-    if (e.target === this) {
-      const pasteOverlay = document.getElementById('paste-overlay');
-      if (pasteOverlay) pasteOverlay.classList.remove('show');
-      if (editor) editor.focus();
-    }
-  });
-
-  // =============================================
-  // 7. OUTPUT
-  // =============================================
-  document.getElementById('output-close')?.addEventListener('click', function(e) {
-    e.stopPropagation();
-    const outputOverlay = document.getElementById('output-overlay');
-    if (outputOverlay) outputOverlay.classList.remove('show');
-  });
-
-  document.getElementById('output-menu')?.addEventListener('click', function(e) {
-    e.stopPropagation();
-    alert('📋 Output Options:\n\n1. Clear Output\n2. Copy to Clipboard\n3. Toggle Word Wrap\n\n(Coming soon!)');
-  });
-
-  // =============================================
-  // 8. PREVIEW CLOSE
-  // =============================================
-  document.getElementById('preview-close')?.addEventListener('click', function() {
-    document.getElementById('preview-overlay').classList.remove('show');
-  });
-
-  // =============================================
-  // 9. TAB MANAGEMENT
-  // =============================================
-  let openTabs = [];
-  let activeTabId = null;
-  let tabContents = {};
-
-  function showEditor() {
-    if (welcomeScreen) welcomeScreen.style.display = 'none';
-    if (editorContainer) editorContainer.style.display = 'block';
-    setTimeout(() => { if (editor) editor.layout(); }, 100);
-  }
-
-  function showWelcomeScreen() {
-    if (welcomeScreen) welcomeScreen.style.display = 'flex';
-    if (editorContainer) editorContainer.style.display = 'none';
-  }
-
-  function createTab(fileName, content = '') {
-    const existingTab = document.querySelector(`.tab-item[data-file="${fileName}"]`);
-    if (existingTab) {
-      switchTab(parseInt(existingTab.dataset.tabId));
-      return;
-    }
-
-    const tabBar = document.getElementById('tab-bar');
-    const newTab = document.createElement('button');
-    const tabId = Date.now() + Math.random() * 1000;
-    newTab.className = 'tab-item';
-    newTab.dataset.tabId = tabId;
-    newTab.dataset.file = fileName;
-    newTab.innerHTML = `📄 ${fileName} <span class="tab-close" data-tab-id="${tabId}">✕</span>`;
-
-    tabBar.appendChild(newTab);
-    tabContents[tabId] = content || '';
-
-    newTab.addEventListener('click', function(e) {
-      if (e.target.classList.contains('tab-close')) return;
-      switchTab(tabId);
-    });
-
-    const closeBtn = newTab.querySelector('.tab-close');
-    closeBtn.addEventListener('click', function(e) {
-      e.stopPropagation();
-      closeTab(tabId);
-    });
-
-    openTabs.push(tabId);
-    showEditor();
-    switchTab(tabId);
-    return tabId;
-  }
-
-  function switchTab(tabId) {
-    const allTabs = document.querySelectorAll('.tab-item');
-    allTabs.forEach(t => t.classList.remove('active'));
-    const selected = document.querySelector(`.tab-item[data-tab-id="${tabId}"]`);
-    if (selected) {
-      selected.classList.add('active');
-      activeTabId = tabId;
-      const fileName = selected.dataset.file;
-      const ext = fileName.split('.').pop().toLowerCase();
-      const languageMap = {
-        'js': 'javascript', 'html': 'html', 'css': 'css', 'json': 'json',
-        'py': 'python', 'java': 'java', 'c': 'c', 'cpp': 'cpp',
-        'md': 'markdown', 'xml': 'xml', 'yaml': 'yaml', 'sh': 'shell',
-        'sql': 'sql', 'go': 'go', 'rb': 'ruby', 'php': 'php', 'rs': 'rust',
-        'ts': 'typescript', 'jsx': 'javascript', 'tsx': 'typescript'
-      };
-      const language = languageMap[ext] || 'plaintext';
-      const content = tabContents[tabId] || '';
-      setEditorContent(content, language);
-    }
-  }
-
-  function closeTab(tabId) {
-    const tab = document.querySelector(`.tab-item[data-tab-id="${tabId}"]`);
-    if (tab) {
-      tab.remove();
-      const index = openTabs.indexOf(tabId);
-      if (index > -1) openTabs.splice(index, 1);
-      delete tabContents[tabId];
-      if (activeTabId === tabId) {
-        activeTabId = null;
-        if (openTabs.length > 0) {
-          switchTab(openTabs[openTabs.length - 1]);
-        } else {
-          showWelcomeScreen();
-          // Reset editor content to empty
-          if (editor) setEditorContent('');
+  initFileMenu({
+    getEditor: () => editor,
+    saveFile: (fileName, content, showFeedback) => saveFile(fileName, content, showFeedback, refreshFileTree),
+    openFile: (fileName) => {
+      openFile(fileName, (name, content) => {
+        ensureEditor();
+        const tabId = createTab(name, content, (fname, c, feedback) => saveFile(fname, c, feedback, refreshFileTree));
+        if (tabId) {
+          switchTab(tabId);
+          const model = getOrCreateModel(name, content);
+          if (editor && model) {
+            editor.setModel(model);
+          } else {
+            const lang = getLanguageFromExtension(name);
+            setEditorContent(content, lang);
+          }
+          setDirty(false);
         }
+        refreshFileTree();
+      });
+    },
+    toggleFileTree,
+    handleSave: (ed) => {
+      if (!ed) { alert('Editor not ready.'); return; }
+      const activeTab = document.querySelector('.tab-item.active');
+      if (!activeTab) { alert('No file is open.'); return; }
+      const fileName = activeTab.dataset.file;
+      const content = ed.getValue();
+      saveFile(fileName, content, true, refreshFileTree);
+    },
+    handleSaveAs: (fileName, content, saveFunc, openTabCb, closeTabCb) => {
+      const newName = prompt('Enter new file name:', fileName);
+      if (!newName || newName === fileName) return;
+      saveFunc(newName, content, true, refreshFileTree).then(result => {
+        if (result.success) {
+          if (openTabCb) openTabCb(newName, content);
+          const activeTab = document.querySelector('.tab-item.active');
+          if (activeTab && closeTabCb) {
+            const tabId = parseInt(activeTab.dataset.tabId);
+            closeTabCb(tabId);
+          }
+          refreshFileTree();
+        }
+      });
+    },
+    showRecentFiles: (openFileFn) => {
+      if (recentFiles.length === 0) {
+        alert('📂 No recent files.');
+        return;
+      }
+      const list = recentFiles.join('\n');
+      const choice = prompt(`📂 Recent Files:\n${list}\n\nEnter a file name to open:`, recentFiles[0]);
+      if (choice && recentFiles.includes(choice)) {
+        if (openFileFn) openFileFn(choice);
+      } else if (choice) {
+        alert('File not in recent list.');
       }
     }
-  }
+  });
 
-  window.createTab = createTab;
-
-  // =============================================
-  // 10. RUN BUTTON (SMART LOGIC)
-  // =============================================
   document.getElementById('run-btn')?.addEventListener('click', function() {
     if (!editor) {
       alert('Editor not ready.');
@@ -285,9 +272,11 @@ export function initApp() {
     const activeTab = document.querySelector('.tab-item.active');
     const outputOverlay = document.getElementById('output-overlay');
     const outputContent = document.getElementById('output-content');
+    const previewOverlay = document.getElementById('preview-overlay');
+    const previewFrame = document.getElementById('preview-frame');
 
     if (!activeTab) {
-      if (outputContent) outputContent.textContent = '⚠️ No file is open. Open or create a file first.';
+      if (outputContent) outputContent.textContent = '⚠️ No file is open.';
       if (outputOverlay) outputOverlay.classList.add('show');
       return;
     }
@@ -299,29 +288,23 @@ export function initApp() {
     if (outputContent) outputContent.textContent = '⏳ Processing...';
     if (outputOverlay) outputOverlay.classList.add('show');
 
-    // --- HTML Preview ---
     if (ext === 'html') {
       const trimmed = code.trim();
       if (!trimmed.startsWith('<') && !trimmed.includes('<html') && !trimmed.includes('<!DOCTYPE')) {
         if (outputContent) outputContent.textContent = `⚠️ "${fileName}" does not appear to be valid HTML.`;
         return;
       }
-      const previewOverlay = document.getElementById('preview-overlay');
-      const previewFrame = document.getElementById('preview-frame');
       if (previewFrame) previewFrame.srcdoc = code;
       if (previewOverlay) previewOverlay.classList.add('show');
       if (outputContent) outputContent.textContent = `✅ HTML preview opened for ${fileName}`;
       return;
     }
 
-    // --- CSS Preview ---
     if (ext === 'css') {
       if (!code.trim()) {
         if (outputContent) outputContent.textContent = `⚠️ "${fileName}" is empty.`;
         return;
       }
-      const previewOverlay = document.getElementById('preview-overlay');
-      const previewFrame = document.getElementById('preview-frame');
       const htmlDoc = `<!DOCTYPE html><html><head><title>CSS Preview</title><style>${code}</style></head><body><h1>CSS Preview</h1><p>Your CSS is applied.</p><button>Button</button><div style="padding:20px;border:1px solid #333;">Sample</div></body></html>`;
       if (previewFrame) previewFrame.srcdoc = htmlDoc;
       if (previewOverlay) previewOverlay.classList.add('show');
@@ -329,7 +312,27 @@ export function initApp() {
       return;
     }
 
-    // --- JSON Validation ---
+    if (ext === 'md') {
+      if (!code.trim()) {
+        if (outputContent) outputContent.textContent = `⚠️ "${fileName}" is empty.`;
+        return;
+      }
+      const markdownHtml = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Markdown Preview</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;background:#fff;color:#333;line-height:1.6;}h1,h2,h3{margin-top:24px;}pre{background:#f4f4f4;padding:16px;border-radius:8px;overflow:auto;}code{background:#f4f4f4;padding:2px 6px;border-radius:4px;}blockquote{border-left:4px solid #ddd;padding-left:16px;color:#666;}table{border-collapse:collapse;width:100%;}th,td{border:1px solid #ddd;padding:8px;text-align:left;}</style></head>
+<body><div id="content">Loading markdown...</div>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"><\/script>
+<script>const markdown=${JSON.stringify(code)};document.getElementById('content').innerHTML=marked.parse(markdown);<\/script>
+</body></html>
+      `;
+      if (previewFrame) previewFrame.srcdoc = markdownHtml;
+      if (previewOverlay) previewOverlay.classList.add('show');
+      if (outputContent) outputContent.textContent = `✅ Markdown preview opened for ${fileName}`;
+      return;
+    }
+
     if (ext === 'json') {
       try {
         JSON.parse(code);
@@ -340,7 +343,6 @@ export function initApp() {
       return;
     }
 
-    // --- JavaScript Execution ---
     if (ext === 'js') {
       if (outputContent) outputContent.textContent = `⏳ Executing ${fileName}...`;
       const btn = this;
@@ -350,7 +352,7 @@ export function initApp() {
       fetch('http://localhost:3000/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: code })
+        body: JSON.stringify({ code })
       })
       .then(response => response.json())
       .then(data => {
@@ -361,19 +363,15 @@ export function initApp() {
       .catch(err => {
         btn.textContent = '▶';
         btn.disabled = false;
-        if (outputContent) outputContent.textContent = `❌ Error executing ${fileName}:\n\nCannot connect to backend.\n\nMake sure the backend server is running.\n(Termux: node backend/index.js)`;
-        console.error('Fetch error:', err);
+        if (outputContent) outputContent.textContent = '❌ Error connecting to backend.';
+        console.error(err);
       });
       return;
     }
 
-    // --- Unsupported ---
-    if (outputContent) outputContent.textContent = `ℹ️ No runner configured for "${ext}" files. Supported: .js, .html, .css, .json`;
+    if (outputContent) outputContent.textContent = `ℹ️ No runner for "${ext}". Supported: .js, .html, .css, .json, .md`;
   });
 
-  // =============================================
-  // 11. D-PAD CURSOR CONTROLS (ACCELERATED)
-  // =============================================
   let isSelectMode = false;
   let activePointerId = null;
   let holdTimer = null;
@@ -478,14 +476,6 @@ export function initApp() {
     });
   }
 
-  const leftBtn = document.getElementById('btn-left');
-  if (leftBtn) {
-    leftBtn.addEventListener('touchstart', function(e) {
-      e.preventDefault();
-      onPointerDown('left', e);
-    }, { passive: false });
-  }
-
   document.addEventListener('pointerup', function(e) {
     if (isPointerDown && activePointerId === e.pointerId) clearHoldAndRepeat();
   });
@@ -499,5 +489,105 @@ export function initApp() {
     if (document.hidden) clearHoldAndRepeat();
   });
 
-  console.log('✅ All features initialized! Welcome screen is active.');
+  EventBus.subscribe('editor:ready', () => {
+    if (editor) {
+      editor.onDidChangeModelContent(() => {
+        if (activeTabId) {
+          const content = editor.getValue();
+          tabContents[activeTabId] = content;
+          if (!isDirty) {
+            setDirty(true);
+          }
+          if (autoSaveTimer) clearTimeout(autoSaveTimer);
+          autoSaveTimer = setTimeout(() => {
+            const activeTab = document.querySelector('.tab-item.active');
+            if (activeTab) {
+              const fileName = activeTab.dataset.file;
+              saveFile(fileName, editor.getValue(), false, () => {
+                setDirty(false);
+                refreshFileTree();
+              });
+            }
+          }, 2000);
+        }
+      });
+    }
+  });
+
+  document.querySelectorAll('.sym-btn[data-sym]').forEach(btn => {
+    btn.addEventListener('click', function() {
+      if (!editor) return;
+      const sym = this.dataset.sym;
+      const selection = editor.getSelection();
+      editor.executeEdits('symbol-insert', [{ range: selection, text: sym, forceMoveMarkers: true }]);
+      const newPos = { lineNumber: selection.startLineNumber, column: selection.startColumn + sym.length };
+      editor.setPosition(newPos);
+      editor.focus();
+    });
+  });
+
+  document.getElementById('copy-btn')?.addEventListener('click', function() {
+    if (!editor) return;
+    const selection = editor.getSelection();
+    if (selection.isEmpty()) return;
+    const model = editor.getModel();
+    if (!model) return;
+    const text = model.getValueInRange(selection);
+    if (!text) return;
+    const ta = document.createElement('textarea');
+    ta.style.cssText = 'position:fixed;opacity:0;left:-9999px;top:-9999px;';
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    try { document.execCommand('copy'); } catch(e) { console.error(e); }
+    document.body.removeChild(ta);
+  });
+
+  document.getElementById('paste-btn')?.addEventListener('click', function() {
+    const pasteOverlay = document.getElementById('paste-overlay');
+    const pasteTextarea = document.getElementById('paste-textarea');
+    if (pasteOverlay) pasteOverlay.classList.add('show');
+    setTimeout(() => { if (pasteTextarea) pasteTextarea.focus(); }, 150);
+  });
+
+  document.getElementById('paste-confirm')?.addEventListener('click', function() {
+    const pasteOverlay = document.getElementById('paste-overlay');
+    const pasteTextarea = document.getElementById('paste-textarea');
+    const text = pasteTextarea ? pasteTextarea.value : '';
+    if (text && editor) {
+      const selection = editor.getSelection();
+      editor.executeEdits('paste', [{ range: selection, text: text, forceMoveMarkers: true }]);
+      editor.setSelection(selection);
+    }
+    if (pasteOverlay) pasteOverlay.classList.remove('show');
+    if (editor) editor.focus();
+  });
+
+  document.getElementById('paste-cancel')?.addEventListener('click', function() {
+    const pasteOverlay = document.getElementById('paste-overlay');
+    if (pasteOverlay) pasteOverlay.classList.remove('show');
+    if (editor) editor.focus();
+  });
+
+  document.getElementById('paste-overlay')?.addEventListener('click', function(e) {
+    if (e.target === this) {
+      const pasteOverlay = document.getElementById('paste-overlay');
+      if (pasteOverlay) pasteOverlay.classList.remove('show');
+      if (editor) editor.focus();
+    }
+  });
+
+  document.getElementById('output-close')?.addEventListener('click', function(e) {
+    e.stopPropagation();
+    document.getElementById('output-overlay').classList.remove('show');
+  });
+
+  document.getElementById('preview-close')?.addEventListener('click', function() {
+    document.getElementById('preview-overlay').classList.remove('show');
+  });
+
+  console.log('✅ Modular IDE Bootstrap complete!');
 }
+
+initApp();
